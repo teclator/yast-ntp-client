@@ -11,6 +11,8 @@
 # Input and output routines.
 require "yast"
 require "yaml"
+require "ntp/cfa/ntp"
+
 
 module Yast
   class NtpClientClass < Module
