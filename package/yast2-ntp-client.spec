@@ -64,6 +64,7 @@ rake install DESTDIR="%{buildroot}"
 %{yast_yncludedir}/ntp-client/*
 %{yast_clientdir}/ntp-client.rb
 %{yast_clientdir}/ntp-client_*.rb
+%{yast_libdir}/ntp-client
 %{yast_scrconfdir}/cfg_ntp.scr
 %{yast_scrconfdir}/etc_ntp.scr
 %{yast_moduledir}/*.rb
