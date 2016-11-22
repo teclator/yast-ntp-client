@@ -87,6 +87,10 @@ module Yast
 
       ret = Sequencer.Run(aliases, sequence)
 
+      if ret == :abort
+        NtpClient.ntp_records = NtpClient.original_records
+      end
+
       ret
     end
 
@@ -138,6 +142,10 @@ module Yast
 
       ret = Sequencer.Run(aliases, sequence)
 
+      if ret == :abort
+        NtpClient.ntp_records = NtpClient.original_records
+      end
+
       ret
     end
 
@@ -160,6 +168,10 @@ module Yast
       Wizard.CreateDialog
       Wizard.SetDesktopTitleAndIcon("ntp-client")
       ret = Sequencer.Run(aliases, sequence)
+
+      if ret == :abort
+        NtpClient.ntp_records = NtpClient.original_records
+      end
 
       UI.CloseDialog
       ret

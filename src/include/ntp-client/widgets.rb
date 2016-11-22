@@ -12,6 +12,14 @@ module Yast
   module NtpClientWidgetsInclude
     include Logger
 
+    RECORD_TYPES = {
+      "server"          => :server,
+      "peer"            => :peer,
+      "__clock"         => :clock,
+      "broadcast"       => :bcast,
+      "broadcastclient" => :bcastclient
+    }
+
     def initialize_ntp_client_widgets(include_target)
       textdomain "ntp-client"
 
@@ -551,32 +559,35 @@ module Yast
           "Incoming Broadcast"
         )
       }
-      items = Builtins.maplist(NtpClient.getSyncRecords) do |i|
-        type = Ops.get_string(i, "type", "")
-        address = Ops.get_string(i, "address", "")
-        index = Ops.get_integer(i, "index", -1)
+      items = NtpClient.getSyncRecords.map do |i|
+        type = i["type"].to_s
+        address = i["address"]
+        index = i["index"]
         if type == "__clock"
           clock_type = getClockType(address)
           unit_number = getClockUnitNumber(address)
-          device = Ops.get_string(i, "device", "")
-          if device == ""
+          device = i["device"].to_s
             # table cell, %1 is integer 0-3
-            device = Builtins.sformat(_("Unit Number: %1"), unit_number)
-          end
+          device = Builtins.sformat(_("Unit Number: %1"), unit_number) if device == ""
           device = "" if clock_type == 1 && unit_number == 0
-          clock_name = Ops.get(@clock_types, [clock_type, "name"], "")
-          if clock_name == ""
-            # table cell, NTP relationship type
-            clock_name = _("Local Radio Clock")
-          end
+          clock_name = @clock_types.fetch(clock_type, {}).fetch("name", "")
+          # table cell, NTP relationship type
+          clock_name = _("Local Radio Clock") if clock_name == ""
           next Item(Id(index), clock_name, device)
         end
-        Item(Id(index), Ops.get_string(types, type, ""), address)
+        Item(Id(index), types[type].to_s, address)
       end
       UI.ChangeWidget(Id(:overview), :Items, items)
       UI.SetFocus(Id(:overview))
 
       nil
+    end
+
+    def enable_overview(enabled)
+      UI.ChangeWidget(Id(:add), :Enabled, enabled)
+      UI.ChangeWidget(Id(:edit), :Enabled, enabled)
+      UI.ChangeWidget(Id(:delete), :Enabled, enabled)
+      UI.ChangeWidget(Id(:overview), :Enabled, enabled)
     end
 
     # Handle events on the widget
@@ -586,22 +597,16 @@ module Yast
     def overviewHandle(id, event)
       event = deep_copy(event)
       #    ntpEnabledOrDisabled (id, event);
-      if Ops.get(event, "ID") == :display_log
-        showLogPopup
-        return nil
-      end
-      ev_id = Ops.get(event, "ID")
-      if ev_id == "boot" || ev_id == "never" || ev_id == "sync" ||
-          ev_id == "policy_combo"
+      return showLogPopup if event["ID"] == :display_log
+
+      case event["ID"]
+      when "boot", "never", "sync", "policy_combo"
         pol = Convert.to_symbol(UI.QueryWidget(Id("policy_combo"), :Value))
 
         enabled = UI.QueryWidget(Id("start"), :CurrentButton) != "never"
         #	UI::ChangeWidget (`id (`advanced), `Enabled, enabled);
         enabled &&= pol != :nomodify
-        UI.ChangeWidget(Id(:add), :Enabled, enabled)
-        UI.ChangeWidget(Id(:edit), :Enabled, enabled)
-        UI.ChangeWidget(Id(:delete), :Enabled, enabled)
-        UI.ChangeWidget(Id(:overview), :Enabled, enabled)
+        enable_overview(enabled)
 
         if enabled && pol == :custom
           UI.ChangeWidget(Id("custom_policy"), :Enabled, true)
@@ -610,47 +615,24 @@ module Yast
           UI.ChangeWidget(Id("custom_policy"), :Enabled, false)
           UI.ChangeWidget(Id("custom_policy"), :Value, "")
         end
-        Builtins.y2milestone(
-          "set modified from %1 to true 4.1 id %2 map %3",
-          NtpClient.modified,
-          id,
-          event
-        )
+        log.info("set modified from #{NtpClient.modified} to true 4.1 id #{id} map #{event}")
         NtpClient.modified = true
         return nil
-      end
-      types = {
-        "server"          => :server,
-        "peer"            => :peer,
-        "__clock"         => :clock,
-        "broadcast"       => :bcast,
-        "broadcastclient" => :bcastclient
-      }
-      if Ops.get(event, "ID") == :add
+      when :add
         NtpClient.selectSyncRecord(-1)
         @peer_type_selected = nil
-        Builtins.y2milestone(
-          "set modified from %1 to true 4.2 id %2 map %3",
-          NtpClient.modified,
-          id,
-          event
-        )
+        log.info("set modified from #{NtpClient.modified} to true 4.2 id #{id} map #{event}")
         NtpClient.modified = true
         return :add
-      elsif Ops.get(event, "ID") == :edit || Ops.get(event, "ID") == :overview
+      when :edit, :overview
         NtpClient.selectSyncRecord(
           Convert.to_integer(UI.QueryWidget(Id(:overview), :CurrentItem))
         )
-        type = Ops.get_string(NtpClient.selected_record, "type", "")
-        Builtins.y2milestone(
-          "set modified from %1 to true 4.3 id %2 map %3",
-          NtpClient.modified,
-          id,
-          event
-        )
+        type = NtpClient.selected_record["type"].to_s
+        log.info("set modified from #{NtpClient.modified} to true 4.3 id #{id} map #{event}")
         NtpClient.modified = true
-        return Ops.get(types, type)
-      elsif Ops.get(event, "ID") == :delete
+        return RECORD_TYPES[type]
+      when :delete
         # yes-no popup
         if Confirm.DeleteSelected
           NtpClient.deleteSyncRecord(
@@ -658,12 +640,7 @@ module Yast
           )
           overviewRedraw
           @sync_record_modified = true
-          Builtins.y2milestone(
-            "set modified from %1 to true 4.4 id %2 map %3",
-            NtpClient.modified,
-            id,
-            event
-          )
+          log.info("set modified from #{NtpClient.modified} to true 4.4 id #{id} map #{event}")
           NtpClient.modified = true
         end
       end
@@ -894,16 +871,9 @@ module Yast
       @peer_type_selected = Convert.to_string(
         UI.QueryWidget(Id("peer_types"), :CurrentButton)
       )
-      types = {
-        "server"          => :server,
-        "peer"            => :peer,
-        "__clock"         => :clock,
-        "broadcast"       => :bcast,
-        "broadcastclient" => :bcastclient
-      }
       if Ops.get(event, "ID") == :next
         Ops.set(NtpClient.selected_record, "type", @peer_type_selected)
-        return Ops.get(types, @peer_type_selected)
+        return RECORD_TYPES[@peer_type_selected]
       end
       nil
     end

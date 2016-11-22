@@ -11,8 +11,7 @@
 # Input and output routines.
 require "yast"
 require "yaml"
-require "ntp/cfa/ntp"
-
+require "cfa/ntp_cfg"
 
 module Yast
   class NtpClientClass < Module
@@ -26,14 +25,16 @@ module Yast
     # List of servers defined by the pool.ntp.org to get random ntp servers
     #
     # @see #http://www.pool.ntp.org/
-    RANDOM_POOL_NTP_SERVERS = ["0.pool.ntp.org", "1.pool.ntp.org", "2.pool.ntp.org"]
+    RANDOM_POOL_NTP_SERVERS = ["0.pool.ntp.org", "1.pool.ntp.org", "2.pool.ntp.org"].freeze
 
     # Different kinds of records which the server can syncronize with and
     # reference clock record
     #
     # @see http://doc.ntp.org/4.1.0/confopt.htm
     # @see http://doc.ntp.org/4.1.0/clockopt.htm
-    SYNC_RECORDS = ["server", "__clock", "peer", "broadcast", "broadcastclient"]
+    SYNC_RECORDS = ["server", "__clock", "peer", "broadcast", "broadcastclient"].freeze
+
+    attr_accessor :original_records
 
     def main
       Yast.import "UI"
@@ -71,6 +72,8 @@ module Yast
       # Read all ntp-client settings
       # @return true on success
       @ntp_records = []
+
+      @original_records = []
 
       @restrict_map = {}
 
@@ -139,6 +142,10 @@ module Yast
       @random_pool_servers = RANDOM_POOL_NTP_SERVERS
     end
 
+    def update_server(type = "server", address, attrs)
+      CFA::NtpCfg.server(type, address)
+    end
+
     def PolicyIsAuto
       @ntp_policy == "auto" || @ntp_policy == "STATIC *"
     end
@@ -162,6 +169,7 @@ module Yast
       Progress.NextStage if progress?
       true
     end
+
 
     def progress?
       Mode.normal
@@ -257,7 +265,7 @@ module Yast
     # @param [String] country two-letter country code
     # @param [Boolean] terse_output display additional data (location etc.)
     # @return [Array] of servers (usable as combo-box items)
-    def GetNtpServersByCountry(country, terse_output)
+    def GetNtpServersByCountry(country, terse_output, set_default = true)
       country_names = {}
       servers = GetNtpServers()
       if country.to_s != ""
@@ -269,7 +277,7 @@ module Yast
         country_names = GetCountryNames()
       end
 
-      default = false
+      default = !set_default
       servers.map do |server, attrs|
         # Select the first occurrence of pool.ntp.org as the default option (bnc#940881)
         selected = default ? false : default = server.end_with?("pool.ntp.org")
@@ -284,9 +292,46 @@ module Yast
       end
     end
 
+    def ProcessNtpConf
+      if @config_has_been_read
+        log.info "Configuration has been read already, skipping."
+        return false
+      end
+
+      if !FileUtils.Exists("/etc/ntp.conf")
+        log.error("File /etc/ntp.conf does not exist")
+        return false
+      end
+
+      @ntp_cfg = CFA::NtpCfg.new
+      @ntp_cfg.load
+
+      log.info("Raw ntp conf #{@ntp_cfg.inspect}")
+      @config_has_been_read = true
+
+      @ntp_records = @ntp_cfg.server_entries
+
+      @restrict_map = @ntp_cfg.restrictions
+
+      # mark local clock to be local clock and not real servers
+      @ntp_records = @ntp_records.map do |p|
+        if p["type"] == "server" && p["address"].to_s.match("^127.127.[0-9]+.[0-9]+$")
+          p["type"] = "__clock"
+        end
+        deep_copy(p)
+      end
+
+      @original_records = deep_copy(@ntp_records)
+      log.info("Los originales son #{@original_records.inspect}")
+
+
+      true
+    end
+
+
     # Read and parse /etc.ntp.conf
     # @return true on success
-    def ProcessNtpConf
+    def ProcessNtpConf2
       if @config_has_been_read
         log.info "Configuration has been read already, skipping."
         return false
@@ -304,7 +349,7 @@ module Yast
       @config_has_been_read = true
       value = conf["value"] || []
       index = -1
-      @ntp_records = Builtins.maplist(value) do |m|
+      @ntp_records = value.map do |m|
         index += 1
         type = m["name"].to_s
         address = Ops.get_string(m, "value", "")
@@ -325,21 +370,11 @@ module Yast
         }
         deep_copy(entry)
       end
-      fudge_records = Builtins.filter(@ntp_records) do |m|
-        Ops.get_string(m, "type", "") == "fudge"
-      end
-      fudge_map = Convert.convert(
-        Builtins.listmap(fudge_records) do |m|
-          key = Ops.get_string(m, "address", "")
-          { key => m }
-        end,
-        from: "map <string, map>",
-        to:   "map <string, map <string, any>>"
-      )
 
-      restrict_records = Builtins.filter(@ntp_records) do |m|
-        Ops.get_string(m, "type", "") == "restrict"
-      end
+      fudge_records = @ntp_records.select { |r| r["type"] == "fudge" }
+      fudge_map = fudge_records.each_with_object({}) { |f, r| r[f["address"]] = f }
+
+      restrict_records = @ntp_records.select { |r| r["type"] == "restrict" }
 
       @restrict_map = Convert.convert(
         Builtins.listmap(restrict_records) do |m|
@@ -368,53 +403,25 @@ module Yast
         to:   "map <string, map <string, any>>"
       )
 
-      @ntp_records = Builtins.filter(@ntp_records) do |m|
-        Ops.get_string(m, "type", "") != "fudge"
-      end
+      @ntp_records.select! { |r| r["type"] != "fudge" && r["type"] != "restrict" }
 
-      @ntp_records = Builtins.filter(@ntp_records) do |m|
-        Ops.get_string(m, "type", "") != "restrict"
+      @ntp_records.map! do |r|
+        if fudge_map.key? r["address"]
+          r["fudge_options"] = fudge_map[r["address"]].fetch("options", "")
+          r["fudge_comment"] = fudge_map[r["address"]].fetch("comment", "")
+        end
+        r
       end
-
-      @ntp_records = Convert.convert(
-        Builtins.maplist(@ntp_records) do |m|
-          if Builtins.haskey(fudge_map, Ops.get_string(m, "address", ""))
-            Ops.set(
-              m,
-              "fudge_options",
-              Ops.get_string(
-                fudge_map,
-                [Ops.get_string(m, "address", ""), "options"],
-                ""
-              )
-            )
-            Ops.set(
-              m,
-              "fudge_comment",
-              Ops.get_string(
-                fudge_map,
-                [Ops.get_string(m, "address", ""), "comment"],
-                ""
-              )
-            )
-          end
-          deep_copy(m)
-        end,
-        from: "list <map>",
-        to:   "list <map <string, any>>"
-      )
 
       # mark local clock to be local clock and not real servers
-      @ntp_records = Builtins.maplist(@ntp_records) do |p|
-        if Ops.get_string(p, "type", "") == "server" &&
-            Builtins.regexpmatch(
-              Ops.get_string(p, "address", ""),
-              "^127.127.[0-9]+.[0-9]+$"
-            )
-          Ops.set(p, "type", "__clock")
+      @ntp_records.map! do |p|
+        if p["type"] == "server" && p["address"].to_s.match("^127.127.[0-9]+.[0-9]+$")
+          p["type"] = "__clock"
         end
-        deep_copy(p)
+        p
       end
+
+      @original_records = deep_copy(@ntp_records)
 
       true
     end
@@ -539,32 +546,18 @@ module Yast
     def ActivateRandomPoolServersFunction
       # leave the current configuration if any
       store_current_options = {}
-      Builtins.foreach(@ntp_records) do |one_record|
-        if Ops.get_string(one_record, "type", "") == "server" &&
-            Ops.get_string(one_record, "address", "") != ""
-          one_address = Ops.get_string(one_record, "address", "")
-          Ops.set(store_current_options, one_address, {})
-          Ops.set(
-            store_current_options,
-            [one_address, "options"],
-            Ops.get_string(one_record, "options", "")
-          )
+      @ntp_records.each do |record|
+        if record["type"] == "server" && record["address"].to_s != ""
+          store_current_options[record["address"]] = { "options" => record["options"].to_s }
         end
       end
 
       # remove all old ones
       DeActivateRandomPoolServersFunction()
 
-      @ntp_records = Builtins.filter(@ntp_records) do |one_record|
-        Ops.get_string(
-          # filter out all servers
-          one_record,
-          "type",
-          ""
-        ) != "server"
-      end
+      @ntp_records.select! { |r| r["type"] != "server" }
 
-      Builtins.foreach(@random_pool_servers) do |one_server|
+      @random_pool_servers.each do |one_server|
         one_options = ""
         if Builtins.haskey(store_current_options, one_server)
           one_options = Ops.get_string(
@@ -656,10 +649,8 @@ module Yast
           if Builtins.haskey(p, "param")
             Ops.set(p, "options", Ops.get_string(p, "param", ""))
           end
-          next deep_copy(p)
-        else
-          next deep_copy(p)
         end
+        next deep_copy(p)
       end
       # restricts is a list of entries whereas restrict_map
       # is a map with target key (ip, ipv4-tag, ipv6-tag,...).
@@ -760,7 +751,7 @@ module Yast
       SYNC_RECORDS.each do |t|
         type_records = @ntp_records.select { |r| r["type"] == t }
         names = type_records.map { |r| r["address"].to_s }.select { |n| n != "" }
-        summary = Summary.AddLine(summary, "#{types[t]}#{names.join(", ")}") if names.size > 0
+        summary = Summary.AddLine(summary, "#{types[t]}#{names.join(", ")}") unless names.empty?
       end
 
       summary
@@ -920,7 +911,6 @@ module Yast
         Ops.set(@ntp_records, @selected_index, @selected_record)
       end
       @modified = true
-      true
     end
 
     # Delete specified synchronization record

@@ -1,4 +1,6 @@
 require_relative "test_helper"
+require "cfa/ntp_cfg"
+require "cfa/memory_file"
 
 Yast.import "NtpClient"
 Yast.import "NetworkInterfaces"
@@ -8,6 +10,16 @@ Yast.import "Service"
 describe Yast::NtpClient do
 
   subject { Yast::NtpClient }
+
+  let(:file) do
+    file_path = File.expand_path("../data/scr_root_read/etc/ntp.conf", __FILE__)
+    CFA::MemoryFile.new(File.read(file_path))
+  end
+
+  before do
+    # use only testing file
+    CFA::BaseModel.default_file_handler = file
+  end
 
   describe "#Read" do
     let(:data_dir) { File.join(File.dirname(__FILE__), "data") }

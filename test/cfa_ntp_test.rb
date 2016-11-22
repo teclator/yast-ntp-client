@@ -1,9 +1,9 @@
 require_relative "test_helper"
 
 require "cfa/memory_file"
-require "ntp/cfa/ntp"
+require "cfa/ntp_cfg"
 
-describe Yast::Ntp::CFA::NtpConf do
+describe CFA::NtpCfg do
   subject { described_class.new(file_handler: file) }
 
   context "with ip version" do

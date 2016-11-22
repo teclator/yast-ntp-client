@@ -8,6 +8,8 @@
 # (time,timezone) and yast2-ntp-client.
 module Yast
   class NtpClientProposalClient < Client
+    include Logger
+
     def main
       Yast.import "UI"
       textdomain "ntp-client"
@@ -187,7 +189,6 @@ module Yast
 
     def MakeProposal
       ntp_items = []
-
       # On the running system, read all the data, otherwise firewall and other
       # stuff outside ntp.conf may not be initialized correctly (#375877)
       if !Stage.initial
@@ -199,25 +200,24 @@ module Yast
         NtpClient.ProcessNtpConf
       end
 
+      selected = true
       if NtpClient.config_has_been_read || NtpClient.ntp_selected
-        Builtins.y2milestone("ntp_items will be filled from /etc/ntp.conf")
+        log.info("ntp_items will be filled from /etc/ntp.conf")
         # grr, GUNS means all of them are used and here we just pick one
-        ntp_items = Builtins.maplist(NtpClient.GetUsedNtpServers) do |server|
-          Item(Id(server), server)
+        NtpClient.GetUsedNtpServers.each do |s|
+          ntp_items << Item(Id(s), format("%s (%s)", s, _("in use")), selected)
+          selected = false if selected
         end
-        # avoid calling Read again (bnc #427712)
         NtpClient.config_has_been_read = true
       end
-      if ntp_items == []
-        Builtins.y2milestone(
-          "Nothing found in /etc/ntp.conf, proposing current timezone-based NTP server list"
-        )
-        time_zone_country = Timezone.GetCountryForTimezone(Timezone.timezone)
-        ntp_items = NtpClient.GetNtpServersByCountry(time_zone_country, true)
-        NtpClient.config_has_been_read = true
+
+      time_zone_country = Timezone.GetCountryForTimezone(Timezone.timezone)
+      NtpClient.GetNtpServersByCountry(time_zone_country, false, selected).each do |server|
+        ntp_items << server
       end
-      ntp_items = Builtins.add(ntp_items, "")
-      Builtins.y2milestone("ntp_items :%1", ntp_items)
+
+      ntp_items << "" if ntp_items.empty?
+      log.info("ntp_items #{ntp_items}")
       UI.ChangeWidget(Id(:ntp_address), :Items, ntp_items)
 
       nil
@@ -372,17 +372,15 @@ module Yast
         Yast.import "Packages"
         Packages.addAdditionalPackage(required_package)
       # Otherwise, prompt user for confirming pkg installation
-      else
-        if !PackageSystem.CheckAndInstallPackages([required_package])
-          Report.Error(
-            Builtins.sformat(
-              _(
-                "Synchronization with NTP server is not possible\nwithout package %1 installed."
-              ),
-              required_package
-            )
+      elsif !PackageSystem.CheckAndInstallPackages([required_package])
+        Report.Error(
+          Builtins.sformat(
+            _(
+              "Synchronization with NTP server is not possible\nwithout package %1 installed."
+            ),
+            required_package
           )
-        end
+        )
       end
 
       ret = 0
@@ -402,7 +400,7 @@ module Yast
           path(".target.bash"),
           "/usr/sbin/sntp -S -K /dev/null -l /var/log/YaST2/sntp.log " \
           "-t 5 -c '#{String.Quote(ntp_server)}'"
-              )
+        )
         Builtins.y2milestone("'sntp %1' returned %2", ntp_server, ret)
         Popup.ClearFeedback
       end
@@ -474,7 +472,7 @@ module Yast
             ),
             server
           )
-          )
+        )
           return false # loop on
         elsif !Ops.get_boolean(argmap, "ntpdate_only", false)
           WriteNtpSettings(

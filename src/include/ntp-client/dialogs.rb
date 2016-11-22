@@ -689,9 +689,7 @@ module Yast
     # @return [Symbol] for wizard sequencer (always `next)
     def SimpleDialogPrepare
       peers = NtpClient.getSyncRecords
-      servers = Builtins.filter(peers) do |m|
-        Ops.get_string(m, "type", "") == "server"
-      end
+      servers = peers.select { |p| p["type"] == "server" }
       index = Ops.get_integer(servers, [0, "index"], -1)
       NtpClient.selectSyncRecord(index)
       :next
@@ -700,9 +698,7 @@ module Yast
     # Pseudo-dialog to store information after the simple dialog
     # @return [Symbol] for wizard sequencer (always `next)
     def SimpleDialogFinish
-      if Ops.get_string(NtpClient.selected_record, "address", "") != ""
-        NtpClient.storeSyncRecord
-      end
+      NtpClient.storeSyncRecord if NtpClient.selected_record["address"].to_s != ""
       :next
     end
 
@@ -719,47 +715,40 @@ module Yast
     # @return [Symbol] for ws `simple or `complex
     def SelectConfigType
       if NtpClient.PolicyIsNonstatic
-        Builtins.y2milestone("Netconfig nonstatic configuration")
+        log.info("Netconfig nonstatic configuration")
         return :complex
       end
       peers = NtpClient.getSyncRecords
-      servers = Builtins.filter(peers) do |m|
-        Ops.get_string(m, "type", "") == "server"
-      end
-      clocks = Builtins.filter(peers) do |m|
-        Ops.get_string(m, "type", "") == "__clock"
-      end
+      servers = peers.select { |p| p["type"] == "server" }
+      clocks  = peers.select { |p| p["type"] == "__clock" }
 
       random_pool_servers_enabled_only =
         # number of listed servers is the same as the needed servers for
         # random_pool_servers function
-        Builtins.size(servers) == Builtins.size(NtpClient.random_pool_servers) &&
+        servers.size == NtpClient.random_pool_servers.size &&
           # enabled means that all of needed servers are listed
           NtpClient.IsRandomServersServiceEnabled
 
-      if Builtins.size(peers) !=
-          Ops.add(Builtins.size(servers), Builtins.size(clocks))
-        Builtins.y2milestone("Something else than server and clock present")
+      if peers.size != server.size + clocks.size
+        log.info("Something else than server and clock present")
         return :complex
       end
+
       if random_pool_servers_enabled_only &&
           Ops.less_or_equal(Builtins.size(clocks), 1)
         Builtins.y2milestone("Simple settings with random_pool_servers")
         return :simple
       end
-      if Ops.greater_than(Builtins.size(servers), 1) ||
-          Ops.greater_than(Builtins.size(clocks), 1)
-        Builtins.y2milestone(
-          "More than one server or more than one clock present"
-        )
+      if servers.size > 1 || clocks.size > 1
+        log.info("More than one server or more than one clock present")
         return :complex
       end
       clock_addr = Ops.get_string(clocks, [0, "address"], "")
       if "127.127.1.0" != clock_addr && "" != clock_addr
-        Builtins.y2milestone("Non-standard clock present")
+        log.info("Non-standard clock present")
         return :complex
       end
-      Builtins.y2milestone("Going simple dialog")
+      log.info("Going simple dialog")
       :simple
     end
   end

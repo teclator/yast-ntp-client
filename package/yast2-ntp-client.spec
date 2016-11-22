@@ -31,6 +31,11 @@ BuildRequires:  yast2-country-data
 BuildRequires:  yast2-devtools >= 3.1.10
 BuildRequires:  rubygem(%rb_default_ruby_abi:rspec)
 BuildRequires:  rubygem(%rb_default_ruby_abi:yast-rake)
+BuildRequires:  rubygem(%rb_default_ruby_abi:cfa)
+Requires:       rubygem(%rb_default_ruby_abi:cfa)
+# lenses are needed to use cfa
+BuildRequires:  augeas-lenses
+Requires:       augeas-lenses
 
 #SLPAPI.pm 
 # Hostname::CurrentDomain
@@ -61,10 +66,9 @@ rake install DESTDIR="%{buildroot}"
 %files
 %defattr(-,root,root)
 %dir %{yast_yncludedir}/ntp-client
+%{yast_dir}/clients/*
+%{yast_dir}/lib
 %{yast_yncludedir}/ntp-client/*
-%{yast_clientdir}/ntp-client.rb
-%{yast_clientdir}/ntp-client_*.rb
-%{yast_libdir}/ntp-client
 %{yast_scrconfdir}/cfg_ntp.scr
 %{yast_scrconfdir}/etc_ntp.scr
 %{yast_moduledir}/*.rb

@@ -45,11 +45,8 @@ module Yast
 
     def reallyExitComplex
       pol = ""
-      if UI.QueryWidget(Id("policy_combo"), :Value) == :auto
-        pol = "auto"
-      elsif UI.QueryWidget(Id("policy_combo"), :Value) == :custom
-        pol = Convert.to_string(UI.QueryWidget(Id("custom_policy"), :Value))
-      end
+      policy = UI.QueryWidget(Id("policy_combo"), :Value)
+      pol = policy == :auto ? "auto" : UI.QueryWidget(Id("custom_policy"), :Value).to_s
 
       if NtpClient.run_service ==
           (UI.QueryWidget(Id("start"), :CurrentButton) == "boot") &&
